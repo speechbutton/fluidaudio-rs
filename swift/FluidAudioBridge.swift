@@ -26,7 +26,7 @@ class FluidAudioBridgeInternal {
         let semaphore = DispatchSemaphore(value: 0)
         var initError: Error?
 
-        Task {
+        Task(priority: .userInitiated) {
             do {
                 let models = try await AsrModels.downloadAndLoad()
                 self.asrModels = models
@@ -56,7 +56,7 @@ class FluidAudioBridgeInternal {
         var result: ASRResult?
         var transcribeError: Error?
 
-        Task {
+        Task(priority: .userInitiated) {
             do {
                 let url = URL(fileURLWithPath: path)
                 result = try await manager.transcribe(url)
@@ -88,7 +88,7 @@ class FluidAudioBridgeInternal {
         var result: ASRResult?
         var transcribeError: Error?
 
-        Task {
+        Task(priority: .userInitiated) {
             do {
                 result = try await manager.transcribe(samples)
             } catch {
@@ -307,7 +307,10 @@ public func fluidaudio_transcribe_samples(
     guard let ptr = ptr, let samples = samples else { return -1 }
     let bridge = Unmanaged<FluidAudioBridgeInternal>.fromOpaque(ptr).takeUnretainedValue()
 
-    let samplesArray = Array(UnsafeBufferPointer(start: samples, count: Int(sampleCount)))
+    let samplesArray = [Float](unsafeUninitializedCapacity: Int(sampleCount)) { buffer, count in
+        buffer.baseAddress!.update(from: samples, count: Int(sampleCount))
+        count = Int(sampleCount)
+    }
 
     do {
         let (text, confidence, duration, processingTime, rtfx) = try bridge.transcribeSamples(samplesArray)
