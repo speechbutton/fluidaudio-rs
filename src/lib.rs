@@ -166,6 +166,19 @@ impl FluidAudio {
         self.bridge.is_vad_available()
     }
 
+    /// Process audio samples through VAD, returns max speech probability (0.0-1.0)
+    ///
+    /// # Arguments
+    /// * `samples` - Audio samples (16kHz mono f32)
+    ///
+    /// # Returns
+    /// * Max speech probability across all frames in the audio
+    pub fn vad_process_samples(&self, samples: &[f32]) -> Result<f32, FluidAudioError> {
+        self.bridge
+            .vad_process_samples(samples)
+            .map_err(FluidAudioError::from)
+    }
+
     // ========== Diarization Methods ==========
 
     /// Initialize the speaker diarization engine

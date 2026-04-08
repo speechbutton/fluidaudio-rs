@@ -35,6 +35,12 @@ extern "C" {
     // VAD
     fn fluidaudio_initialize_vad(bridge: *mut std::ffi::c_void, threshold: f32) -> i32;
     fn fluidaudio_is_vad_available(bridge: *mut std::ffi::c_void) -> i32;
+    fn fluidaudio_vad_process_samples(
+        bridge: *mut std::ffi::c_void,
+        samples: *const f32,
+        sample_count: u32,
+        out_probability: *mut f32,
+    ) -> i32;
 
     // Diarization
     fn fluidaudio_initialize_diarization(bridge: *mut std::ffi::c_void, threshold: f64) -> i32;
@@ -201,6 +207,23 @@ impl FluidAudioBridge {
 
     pub fn is_vad_available(&self) -> bool {
         unsafe { fluidaudio_is_vad_available(self.ptr) != 0 }
+    }
+
+    pub fn vad_process_samples(&self, samples: &[f32]) -> Result<f32, String> {
+        let mut prob: f32 = 0.0;
+        let result = unsafe {
+            fluidaudio_vad_process_samples(
+                self.ptr,
+                samples.as_ptr(),
+                samples.len() as u32,
+                &mut prob,
+            )
+        };
+        if result == 0 {
+            Ok(prob)
+        } else {
+            Err("VAD processing failed".to_string())
+        }
     }
 
     pub fn initialize_diarization(&self, threshold: f64) -> Result<(), String> {

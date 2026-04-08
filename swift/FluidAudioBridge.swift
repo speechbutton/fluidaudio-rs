@@ -140,6 +140,35 @@ class FluidAudioBridgeInternal {
         return vadManager != nil
     }
 
+    /// Process audio samples through VAD, returns max speech probability.
+    func vadProcessSamples(_ samples: [Float]) throws -> Float {
+        guard let manager = vadManager else {
+            throw BridgeError.notInitialized
+        }
+
+        let semaphore = DispatchSemaphore(value: 0)
+        var maxProb: Float = 0.0
+        var processError: Error?
+
+        Task(priority: .userInitiated) {
+            do {
+                let results = try await manager.process(samples)
+                maxProb = results.map { $0.probability }.max() ?? 0.0
+            } catch {
+                processError = error
+            }
+            semaphore.signal()
+        }
+
+        semaphore.wait()
+
+        if let error = processError {
+            throw error
+        }
+
+        return maxProb
+    }
+
     // MARK: - Diarization
 
     func initializeDiarization(_ threshold: Double) throws {
@@ -358,6 +387,31 @@ public func fluidaudio_is_vad_available(_ ptr: UnsafeMutableRawPointer?) -> Int3
     guard let ptr = ptr else { return 0 }
     let bridge = Unmanaged<FluidAudioBridgeInternal>.fromOpaque(ptr).takeUnretainedValue()
     return bridge.isVadAvailable() ? 1 : 0
+}
+
+@_cdecl("fluidaudio_vad_process_samples")
+public func fluidaudio_vad_process_samples(
+    _ ptr: UnsafeMutableRawPointer?,
+    _ samples: UnsafePointer<Float>?,
+    _ sampleCount: UInt32,
+    _ outProbability: UnsafeMutablePointer<Float>?
+) -> Int32 {
+    guard let ptr = ptr, let samples = samples else { return -1 }
+    let bridge = Unmanaged<FluidAudioBridgeInternal>.fromOpaque(ptr).takeUnretainedValue()
+
+    let samplesArray = [Float](unsafeUninitializedCapacity: Int(sampleCount)) { buffer, count in
+        buffer.baseAddress!.update(from: samples, count: Int(sampleCount))
+        count = Int(sampleCount)
+    }
+
+    do {
+        let prob = try bridge.vadProcessSamples(samplesArray)
+        outProbability?.pointee = prob
+        return 0
+    } catch {
+        print("VAD process error: \(error)")
+        return -1
+    }
 }
 
 // MARK: - Diarization FFI
