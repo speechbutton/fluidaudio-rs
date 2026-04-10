@@ -15,7 +15,7 @@ let package = Package(
         ),
     ],
     dependencies: [
-        .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.12.6"),
+        .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.13.6"),
     ],
     targets: [
         .target(

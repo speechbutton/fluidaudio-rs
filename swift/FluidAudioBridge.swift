@@ -19,7 +19,7 @@ class FluidAudioBridgeInternal {
     private var asrModels: AsrModels?
     private var vadManager: VadManager?
     private var diarizerManager: OfflineDiarizerManager?
-    private var streamingAsrManager: StreamingAsrManager?
+    private var streamingAsrManager: SlidingWindowAsrManager?
     private var qwen3AsrManager: Any?  // Qwen3AsrManager on macOS 15+
     private var qwen3StreamingManager: Any?  // Qwen3StreamingManager on macOS 15+
 
@@ -244,7 +244,7 @@ class FluidAudioBridgeInternal {
     // MARK: - Streaming ASR
     //
     // BUG WORKAROUND (FluidAudio 0.12.6):
-    // StreamingAsrManager.init() creates its AsyncStream<AVAudioPCMBuffer>
+    // SlidingWindowAsrManager.init() creates its AsyncStream<AVAudioPCMBuffer>
     // exactly once; calling finish() closes that stream permanently. A
     // second start() on the same instance spawns a new recognizer task that
     // reads from the now-closed stream — streamAudio() calls after that
@@ -252,7 +252,7 @@ class FluidAudioBridgeInternal {
     // during the FIRST session. The old bridge had this bug: identical
     // streaming text for every recording.
     //
-    // Fix: rebuild the StreamingAsrManager instance per session. Initialize
+    // Fix: rebuild the SlidingWindowAsrManager instance per session. Initialize
     // only downloads models here; start() constructs a fresh manager each
     // time so each recording gets a fresh input stream.
 
@@ -286,7 +286,7 @@ class FluidAudioBridgeInternal {
         var startError: Error?
 
         // Create a fresh manager for this session (see the big comment above).
-        let manager = StreamingAsrManager()
+        let manager = SlidingWindowAsrManager()
         Task {
             do {
                 try await manager.start(models: models, source: .microphone)
