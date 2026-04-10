@@ -400,27 +400,11 @@ class FluidAudioBridgeInternal {
 
     @available(macOS 15, iOS 18, *)
     func initializeQwen3Asr() throws {
-        let semaphore = DispatchSemaphore(value: 0)
-        var initError: Error?
-
-        Task {
-            do {
-                let manager = Qwen3AsrManager()
-                // Models are auto-downloaded from HuggingFace on first use
-                let modelDir = try await Qwen3AsrModels.downloadModelIfNeeded()
-                try await manager.loadModels(from: modelDir)
-                self.qwen3AsrManager = manager
-            } catch {
-                initError = error
-            }
-            semaphore.signal()
-        }
-
-        semaphore.wait()
-
-        if let error = initError {
-            throw error
-        }
+        // SpeechButton fork: stubbed out. The upstream FluidAudio Swift API
+        // for Qwen3AsrModels doesn't match this bridge (downloadModelIfNeeded
+        // is missing), and SpeechButton doesn't use Qwen3 yet. Re-enable once
+        // upstream API is aligned or replace with a working call.
+        throw BridgeError.notInitialized
     }
 
     @available(macOS 15, iOS 18, *)
@@ -533,29 +517,8 @@ class FluidAudioBridgeInternal {
 
     @available(macOS 15, iOS 18, *)
     func initializeQwen3Streaming() throws {
-        let semaphore = DispatchSemaphore(value: 0)
-        var initError: Error?
-
-        Task {
-            do {
-                let asrManager = Qwen3AsrManager()
-                let modelDir = try await Qwen3AsrModels.downloadModelIfNeeded()
-                try await asrManager.loadModels(from: modelDir)
-
-                let streamingManager = Qwen3StreamingManager(asrManager: asrManager)
-                self.qwen3AsrManager = asrManager
-                self.qwen3StreamingManager = streamingManager
-            } catch {
-                initError = error
-            }
-            semaphore.signal()
-        }
-
-        semaphore.wait()
-
-        if let error = initError {
-            throw error
-        }
+        // SpeechButton fork: stubbed out, see initializeQwen3Asr.
+        throw BridgeError.notInitialized
     }
 
     @available(macOS 15, iOS 18, *)
