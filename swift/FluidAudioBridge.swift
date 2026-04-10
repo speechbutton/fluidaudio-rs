@@ -35,7 +35,7 @@ class FluidAudioBridgeInternal {
                 self.asrModels = models
 
                 let manager = AsrManager()
-                try await manager.initialize(models: models)
+                try await manager.loadModels(models)
                 self.asrManager = manager
             } catch {
                 initError = error
