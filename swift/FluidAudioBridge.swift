@@ -20,8 +20,8 @@ class FluidAudioBridgeInternal {
     private var vadManager: VadManager?
     private var diarizerManager: OfflineDiarizerManager?
     private var streamingAsrManager: StreamingAsrManager?
-    private var qwen3AsrManager: Qwen3AsrManager?
-    private var qwen3StreamingManager: Qwen3StreamingManager?
+    private var qwen3AsrManager: Any?  // Qwen3AsrManager on macOS 15+
+    private var qwen3StreamingManager: Any?  // Qwen3StreamingManager on macOS 15+
 
     init() {}
 
@@ -425,7 +425,7 @@ class FluidAudioBridgeInternal {
 
     @available(macOS 15, iOS 18, *)
     func qwen3TranscribeSamples(_ samples: [Float], language: String?) throws -> (String, Float, Double, Double, Float) {
-        guard let manager = qwen3AsrManager else {
+        guard let manager = qwen3AsrManager as? Qwen3AsrManager else {
             throw BridgeError.notInitialized
         }
 
@@ -560,7 +560,7 @@ class FluidAudioBridgeInternal {
 
     @available(macOS 15, iOS 18, *)
     func qwen3StreamingStart(language: String?, minAudioSeconds: Double, chunkSeconds: Double, maxAudioSeconds: Double) throws {
-        guard let manager = qwen3StreamingManager else {
+        guard let manager = qwen3StreamingManager as? Qwen3StreamingManager else {
             throw BridgeError.notInitialized
         }
 
@@ -584,7 +584,7 @@ class FluidAudioBridgeInternal {
 
     @available(macOS 15, iOS 18, *)
     func qwen3StreamingFeed(_ samples: [Float]) throws -> String? {
-        guard let manager = qwen3StreamingManager else {
+        guard let manager = qwen3StreamingManager as? Qwen3StreamingManager else {
             throw BridgeError.notInitialized
         }
 
@@ -612,7 +612,7 @@ class FluidAudioBridgeInternal {
 
     @available(macOS 15, iOS 18, *)
     func qwen3StreamingFinish() throws -> String {
-        guard let manager = qwen3StreamingManager else {
+        guard let manager = qwen3StreamingManager as? Qwen3StreamingManager else {
             throw BridgeError.notInitialized
         }
 
