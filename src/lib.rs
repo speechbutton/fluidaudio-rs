@@ -82,12 +82,52 @@ impl FluidAudio {
 
     // ========== ASR Methods ==========
 
-    /// Initialize the ASR (Automatic Speech Recognition) engine
-    ///
-    /// This downloads and loads the ASR models. First run may take 20-30 seconds
-    /// as models are compiled for the Neural Engine.
+    /// Initialize the ASR engine with the default model (Parakeet v3, multilingual).
     pub fn init_asr(&self) -> Result<(), FluidAudioError> {
         self.bridge.initialize_asr().map_err(FluidAudioError::from)
+    }
+
+    /// Initialize the ASR engine with Parakeet v2 (English-only, higher recall).
+    pub fn init_asr_v2(&self) -> Result<(), FluidAudioError> {
+        self.bridge.initialize_asr_v2().map_err(FluidAudioError::from)
+    }
+
+    // ========== EOU (End-of-Utterance) Methods ==========
+
+    /// Initialize the Parakeet EOU streaming pipeline (English-only, 120M params).
+    ///
+    /// EOU detects when a sentence's meaning is complete — not by silence,
+    /// but by semantic understanding. Each feed() may return a transcript
+    /// chunk when an utterance boundary is detected.
+    ///
+    /// # Arguments
+    /// * `debounce_ms` - Minimum silence duration before confirming EOU (default: 1280)
+    pub fn init_eou(&self, debounce_ms: i32) -> Result<(), FluidAudioError> {
+        self.bridge.initialize_eou(debounce_ms).map_err(FluidAudioError::from)
+    }
+
+    /// Feed audio samples to the EOU pipeline.
+    ///
+    /// Returns `Some(transcript)` when an end-of-utterance is detected —
+    /// this is a complete sentence/thought, not a silence-based chunk.
+    /// Returns `None` when speech is ongoing.
+    pub fn eou_feed(&self, samples: &[f32]) -> Result<Option<String>, FluidAudioError> {
+        self.bridge.eou_feed(samples).map_err(FluidAudioError::from)
+    }
+
+    /// Finish the EOU session and get any remaining transcript.
+    pub fn eou_finish(&self) -> Result<String, FluidAudioError> {
+        self.bridge.eou_finish().map_err(FluidAudioError::from)
+    }
+
+    /// Reset the EOU pipeline state for a new recording session.
+    pub fn eou_reset(&self) -> Result<(), FluidAudioError> {
+        self.bridge.eou_reset().map_err(FluidAudioError::from)
+    }
+
+    /// Whether the EOU pipeline is initialized and ready.
+    pub fn is_eou_available(&self) -> bool {
+        self.bridge.is_eou_available()
     }
 
     /// Transcribe an audio file
