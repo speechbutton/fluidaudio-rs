@@ -55,6 +55,24 @@ extern "C" {
     ) -> i32;
     fn fluidaudio_is_streaming_asr_available(bridge: *mut std::ffi::c_void) -> i32;
 
+    // ASR v2 (English-only)
+    fn fluidaudio_initialize_asr_v2(bridge: *mut std::ffi::c_void) -> i32;
+
+    // EOU (End-of-Utterance streaming)
+    fn fluidaudio_initialize_eou(bridge: *mut std::ffi::c_void, debounce_ms: i32) -> i32;
+    fn fluidaudio_eou_feed(
+        bridge: *mut std::ffi::c_void,
+        samples: *const f32,
+        count: u32,
+        out_text: *mut *mut i8,
+    ) -> i32;
+    fn fluidaudio_eou_finish(
+        bridge: *mut std::ffi::c_void,
+        out_text: *mut *mut i8,
+    ) -> i32;
+    fn fluidaudio_eou_reset(bridge: *mut std::ffi::c_void) -> i32;
+    fn fluidaudio_is_eou_available(bridge: *mut std::ffi::c_void) -> i32;
+
     // VAD
     fn fluidaudio_initialize_vad(bridge: *mut std::ffi::c_void, threshold: f32) -> i32;
     fn fluidaudio_is_vad_available(bridge: *mut std::ffi::c_void) -> i32;
@@ -679,6 +697,63 @@ impl FluidAudioBridge {
 
     pub fn is_qwen3_streaming_available(&self) -> bool {
         unsafe { fluidaudio_is_qwen3_streaming_available(self.ptr) != 0 }
+    }
+
+    // ── ASR v2 (English-only) ─────────────────────────────────────────
+
+    pub fn initialize_asr_v2(&self) -> Result<(), String> {
+        let result = unsafe { fluidaudio_initialize_asr_v2(self.ptr) };
+        if result == 0 { Ok(()) } else { Err("ASR v2 initialization failed".into()) }
+    }
+
+    // ── EOU (End-of-Utterance streaming) ──────────────────────────────
+
+    pub fn initialize_eou(&self, debounce_ms: i32) -> Result<(), String> {
+        let result = unsafe { fluidaudio_initialize_eou(self.ptr, debounce_ms) };
+        if result == 0 { Ok(()) } else { Err("EOU initialization failed".into()) }
+    }
+
+    pub fn eou_feed(&self, samples: &[f32]) -> Result<Option<String>, String> {
+        let mut text_ptr: *mut i8 = std::ptr::null_mut();
+        let result = unsafe {
+            fluidaudio_eou_feed(self.ptr, samples.as_ptr(), samples.len() as u32, &mut text_ptr)
+        };
+        if result != 0 { return Err("EOU feed failed".into()); }
+        if text_ptr.is_null() {
+            Ok(None)
+        } else {
+            let text = unsafe {
+                let s = CStr::from_ptr(text_ptr).to_string_lossy().into_owned();
+                fluidaudio_free_string(text_ptr);
+                s
+            };
+            Ok(Some(text))
+        }
+    }
+
+    pub fn eou_finish(&self) -> Result<String, String> {
+        let mut text_ptr: *mut i8 = std::ptr::null_mut();
+        let result = unsafe { fluidaudio_eou_finish(self.ptr, &mut text_ptr) };
+        if result != 0 { return Err("EOU finish failed".into()); }
+        if text_ptr.is_null() {
+            Ok(String::new())
+        } else {
+            let text = unsafe {
+                let s = CStr::from_ptr(text_ptr).to_string_lossy().into_owned();
+                fluidaudio_free_string(text_ptr);
+                s
+            };
+            Ok(text)
+        }
+    }
+
+    pub fn eou_reset(&self) -> Result<(), String> {
+        let result = unsafe { fluidaudio_eou_reset(self.ptr) };
+        if result == 0 { Ok(()) } else { Err("EOU reset failed".into()) }
+    }
+
+    pub fn is_eou_available(&self) -> bool {
+        unsafe { fluidaudio_is_eou_available(self.ptr) != 0 }
     }
 
     pub fn system_info(&self) -> SystemInfo {

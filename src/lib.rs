@@ -90,6 +90,32 @@ impl FluidAudio {
         self.bridge.initialize_asr().map_err(FluidAudioError::from)
     }
 
+    pub fn init_asr_v2(&self) -> Result<(), FluidAudioError> {
+        self.bridge.initialize_asr_v2().map_err(FluidAudioError::from)
+    }
+
+    // ========== EOU (End-of-Utterance) Methods ==========
+
+    pub fn init_eou(&self, debounce_ms: i32) -> Result<(), FluidAudioError> {
+        self.bridge.initialize_eou(debounce_ms).map_err(FluidAudioError::from)
+    }
+
+    pub fn eou_feed(&self, samples: &[f32]) -> Result<Option<String>, FluidAudioError> {
+        self.bridge.eou_feed(samples).map_err(FluidAudioError::from)
+    }
+
+    pub fn eou_finish(&self) -> Result<String, FluidAudioError> {
+        self.bridge.eou_finish().map_err(FluidAudioError::from)
+    }
+
+    pub fn eou_reset(&self) -> Result<(), FluidAudioError> {
+        self.bridge.eou_reset().map_err(FluidAudioError::from)
+    }
+
+    pub fn is_eou_available(&self) -> bool {
+        self.bridge.is_eou_available()
+    }
+
     /// Transcribe an audio file
     ///
     /// # Arguments

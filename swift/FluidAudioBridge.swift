@@ -22,16 +22,27 @@ class FluidAudioBridgeInternal {
     private var streamingAsrManager: SlidingWindowAsrManager?
     private var qwen3AsrManager: Any?  // Qwen3AsrManager on macOS 15+
     private var qwen3StreamingManager: Any?  // Qwen3StreamingManager on macOS 15+
+    private var eouManager: StreamingEouAsrManager?
 
     init() {}
 
+    // MARK: - ASR (v3 default, v2 English-only)
+
     func initializeAsr() throws {
+        try initializeAsrWithVersion(.v3)
+    }
+
+    func initializeAsrV2() throws {
+        try initializeAsrWithVersion(.v2)
+    }
+
+    private func initializeAsrWithVersion(_ version: AsrModelVersion) throws {
         let semaphore = DispatchSemaphore(value: 0)
         var initError: Error?
 
         Task(priority: .userInitiated) {
             do {
-                let models = try await AsrModels.downloadAndLoad()
+                let models = try await AsrModels.downloadAndLoad(version: version)
                 self.asrModels = models
 
                 let manager = AsrManager()
@@ -48,6 +59,122 @@ class FluidAudioBridgeInternal {
         if let error = initError {
             throw error
         }
+    }
+
+    // MARK: - EOU (End-of-Utterance streaming)
+
+    func initializeEou(debounceMs: Int32) throws {
+        let semaphore = DispatchSemaphore(value: 0)
+        var initError: Error?
+
+        Task(priority: .userInitiated) {
+            do {
+                let manager = StreamingEouAsrManager(
+                    eouDebounceMs: Int(debounceMs)
+                )
+                try await manager.loadModelsFromHuggingFace()
+                self.eouManager = manager
+            } catch {
+                initError = error
+            }
+            semaphore.signal()
+        }
+
+        semaphore.wait()
+
+        if let error = initError {
+            throw error
+        }
+    }
+
+    func eouFeed(_ samples: [Float]) throws -> String? {
+        guard let manager = eouManager else {
+            throw BridgeError.notInitialized
+        }
+
+        let semaphore = DispatchSemaphore(value: 0)
+        var capturedTranscript: String?
+        var feedError: Error?
+
+        Task(priority: .userInitiated) {
+            do {
+                var eouText: String?
+                await manager.setEouCallback { transcript in
+                    eouText = transcript
+                }
+
+                let buffer = Self.samplesToAVBuffer(samples)
+                _ = try await manager.process(audioBuffer: buffer)
+
+                capturedTranscript = eouText
+            } catch {
+                feedError = error
+            }
+            semaphore.signal()
+        }
+
+        semaphore.wait()
+
+        if let error = feedError {
+            throw error
+        }
+        return capturedTranscript
+    }
+
+    func eouFinish() throws -> String {
+        guard let manager = eouManager else {
+            throw BridgeError.notInitialized
+        }
+
+        let semaphore = DispatchSemaphore(value: 0)
+        var result: String?
+        var finishError: Error?
+
+        Task(priority: .userInitiated) {
+            do {
+                result = try await manager.finish()
+            } catch {
+                finishError = error
+            }
+            semaphore.signal()
+        }
+
+        semaphore.wait()
+
+        if let error = finishError {
+            throw error
+        }
+        return result ?? ""
+    }
+
+    func eouReset() {
+        guard let manager = eouManager else { return }
+        let semaphore = DispatchSemaphore(value: 0)
+        Task {
+            await manager.reset()
+            semaphore.signal()
+        }
+        semaphore.wait()
+    }
+
+    var isEouAvailable: Bool {
+        eouManager != nil
+    }
+
+    private static func samplesToAVBuffer(_ samples: [Float]) -> AVAudioPCMBuffer {
+        let format = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 16000,
+            channels: 1,
+            interleaved: false
+        )!
+        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count))!
+        buffer.frameLength = AVAudioFrameCount(samples.count)
+        let channelData = buffer.floatChannelData![0]
+        for i in 0..<samples.count {
+            channelData[i] = samples[i]
+        }
+        return buffer
     }
 
     func transcribeFile(_ path: String) throws -> (String, Float, Double, Double, Float) {
@@ -1313,4 +1440,90 @@ public func fluidaudio_is_qwen3_streaming_available(_ ptr: UnsafeMutableRawPoint
     } else {
         return 0
     }
+}
+
+// MARK: - ASR v2 (English-only)
+
+@_cdecl("fluidaudio_initialize_asr_v2")
+public func fluidaudio_initialize_asr_v2(_ ptr: UnsafeMutableRawPointer?) -> Int32 {
+    guard let ptr = ptr else { return -1 }
+    let bridge = Unmanaged<FluidAudioBridgeInternal>.fromOpaque(ptr).takeUnretainedValue()
+    do {
+        try bridge.initializeAsrV2()
+        return 0
+    } catch {
+        print("[FluidAudioBridge] ASR v2 init error: \(error)")
+        return -1
+    }
+}
+
+// MARK: - EOU (End-of-Utterance streaming)
+
+@_cdecl("fluidaudio_initialize_eou")
+public func fluidaudio_initialize_eou(_ ptr: UnsafeMutableRawPointer?, _ debounce_ms: Int32) -> Int32 {
+    guard let ptr = ptr else { return -1 }
+    let bridge = Unmanaged<FluidAudioBridgeInternal>.fromOpaque(ptr).takeUnretainedValue()
+    do {
+        try bridge.initializeEou(debounceMs: debounce_ms)
+        return 0
+    } catch {
+        print("[FluidAudioBridge] EOU init error: \(error)")
+        return -1
+    }
+}
+
+@_cdecl("fluidaudio_eou_feed")
+public func fluidaudio_eou_feed(
+    _ ptr: UnsafeMutableRawPointer?,
+    _ samples: UnsafePointer<Float>?,
+    _ count: UInt32,
+    _ out_text: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
+) -> Int32 {
+    guard let ptr = ptr, let samples = samples else { return -1 }
+    let bridge = Unmanaged<FluidAudioBridgeInternal>.fromOpaque(ptr).takeUnretainedValue()
+    let sampleArray = Array(UnsafeBufferPointer(start: samples, count: Int(count)))
+    do {
+        let eouText = try bridge.eouFeed(sampleArray)
+        if let text = eouText, let out = out_text {
+            out.pointee = strdup(text)
+        } else if let out = out_text {
+            out.pointee = nil
+        }
+        return 0
+    } catch {
+        print("[FluidAudioBridge] EOU feed error: \(error)")
+        return -1
+    }
+}
+
+@_cdecl("fluidaudio_eou_finish")
+public func fluidaudio_eou_finish(
+    _ ptr: UnsafeMutableRawPointer?,
+    _ out_text: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
+) -> Int32 {
+    guard let ptr = ptr else { return -1 }
+    let bridge = Unmanaged<FluidAudioBridgeInternal>.fromOpaque(ptr).takeUnretainedValue()
+    do {
+        let text = try bridge.eouFinish()
+        out_text?.pointee = strdup(text)
+        return 0
+    } catch {
+        print("[FluidAudioBridge] EOU finish error: \(error)")
+        return -1
+    }
+}
+
+@_cdecl("fluidaudio_eou_reset")
+public func fluidaudio_eou_reset(_ ptr: UnsafeMutableRawPointer?) -> Int32 {
+    guard let ptr = ptr else { return -1 }
+    let bridge = Unmanaged<FluidAudioBridgeInternal>.fromOpaque(ptr).takeUnretainedValue()
+    bridge.eouReset()
+    return 0
+}
+
+@_cdecl("fluidaudio_is_eou_available")
+public func fluidaudio_is_eou_available(_ ptr: UnsafeMutableRawPointer?) -> Int32 {
+    guard let ptr = ptr else { return 0 }
+    let bridge = Unmanaged<FluidAudioBridgeInternal>.fromOpaque(ptr).takeUnretainedValue()
+    return bridge.isEouAvailable ? 1 : 0
 }
