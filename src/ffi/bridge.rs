@@ -73,6 +73,18 @@ extern "C" {
     fn fluidaudio_eou_reset(bridge: *mut std::ffi::c_void) -> i32;
     fn fluidaudio_is_eou_available(bridge: *mut std::ffi::c_void) -> i32;
 
+    // Non-blocking EOU (callback-based)
+    fn fluidaudio_eou_set_callback(
+        bridge: *mut std::ffi::c_void,
+        callback: Option<extern "C" fn(*const i8)>,
+    ) -> i32;
+    fn fluidaudio_eou_feed_async(
+        bridge: *mut std::ffi::c_void,
+        samples: *const f32,
+        count: u32,
+    ) -> i32;
+    fn fluidaudio_eou_finish_async(bridge: *mut std::ffi::c_void) -> i32;
+
     // VAD
     fn fluidaudio_initialize_vad(bridge: *mut std::ffi::c_void, threshold: f32) -> i32;
     fn fluidaudio_is_vad_available(bridge: *mut std::ffi::c_void) -> i32;
@@ -754,6 +766,33 @@ impl FluidAudioBridge {
 
     pub fn is_eou_available(&self) -> bool {
         unsafe { fluidaudio_is_eou_available(self.ptr) != 0 }
+    }
+
+    // ── Non-blocking EOU (callback-based) ────────────────────────────────
+
+    /// Register a C callback for EOU text delivery. The callback is called
+    /// from the Swift async thread when an utterance boundary is detected.
+    /// The callback receives a `strdup`-ed C string that must be freed by
+    /// the receiver.
+    pub fn eou_set_callback(&self, cb: Option<extern "C" fn(*const i8)>) -> Result<(), String> {
+        let result = unsafe { fluidaudio_eou_set_callback(self.ptr, cb) };
+        if result == 0 { Ok(()) } else { Err("EOU set_callback failed".into()) }
+    }
+
+    /// Non-blocking EOU feed: queues audio to the Swift async runtime and
+    /// returns immediately. Text is delivered via the registered callback.
+    pub fn eou_feed_async(&self, samples: &[f32]) -> Result<(), String> {
+        let result = unsafe {
+            fluidaudio_eou_feed_async(self.ptr, samples.as_ptr(), samples.len() as u32)
+        };
+        if result == 0 { Ok(()) } else { Err("EOU async feed failed".into()) }
+    }
+
+    /// Non-blocking EOU finish: queues the finish operation. Remaining text
+    /// is delivered via the registered callback.
+    pub fn eou_finish_async(&self) -> Result<(), String> {
+        let result = unsafe { fluidaudio_eou_finish_async(self.ptr) };
+        if result == 0 { Ok(()) } else { Err("EOU async finish failed".into()) }
     }
 
     pub fn system_info(&self) -> SystemInfo {

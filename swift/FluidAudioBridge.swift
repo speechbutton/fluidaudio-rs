@@ -14,6 +14,11 @@ struct BridgeDiarizationSegment {
     var qualityScore: Float
 }
 
+/// C callback type for non-blocking EOU text delivery.
+/// Called from Swift when the EOU model detects an utterance boundary.
+/// The callback receives a C string that the receiver must free with `free()`.
+public typealias EouTextCallback = @convention(c) (UnsafePointer<CChar>?) -> Void
+
 class FluidAudioBridgeInternal {
     private var asrManager: AsrManager?
     private var asrModels: AsrModels?
@@ -23,6 +28,11 @@ class FluidAudioBridgeInternal {
     private var qwen3AsrManager: Any?  // Qwen3AsrManager on macOS 15+
     private var qwen3StreamingManager: Any?  // Qwen3StreamingManager on macOS 15+
     private var eouManager: StreamingEouAsrManager?
+
+    /// C callback for delivering EOU text chunks to Rust (non-blocking).
+    /// Set via `fluidaudio_eou_set_callback`. Called on the Swift async thread
+    /// when an utterance boundary is detected.
+    var eouCallback: EouTextCallback?
 
     init() {}
 
@@ -87,6 +97,68 @@ class FluidAudioBridgeInternal {
         }
     }
 
+    /// Non-blocking EOU feed: queues audio to the Swift async actor and
+    /// returns immediately. When the EOU model detects an utterance boundary,
+    /// it delivers pre-transcribed text via `eouCallback`.
+    ///
+    /// Returns: true if the audio was successfully queued, false on error.
+    func eouFeedAsync(_ samples: [Float]) -> Bool {
+        guard let manager = eouManager else {
+            return false
+        }
+        let callback = self.eouCallback
+        let buffer = Self.samplesToAVBuffer(samples)
+
+        Task(priority: .userInitiated) {
+            do {
+                var eouText: String?
+                await manager.setEouCallback { transcript in
+                    eouText = transcript
+                }
+
+                _ = try await manager.process(audioBuffer: buffer)
+
+                // If EOU detected an utterance boundary, deliver text via C callback
+                if let text = eouText, !text.isEmpty, let cb = callback {
+                    text.withCString { cStr in
+                        // strdup so the receiver can free with sb_free_string / free()
+                        cb(strdup(cStr))
+                    }
+                }
+            } catch {
+                print("[FluidAudioBridge] EOU async feed error: \(error)")
+            }
+        }
+
+        return true
+    }
+
+    /// Non-blocking EOU finish: queues the finish call and delivers
+    /// remaining text via the callback.
+    func eouFinishAsync() -> Bool {
+        guard let manager = eouManager else {
+            return false
+        }
+        let callback = self.eouCallback
+
+        Task(priority: .userInitiated) {
+            do {
+                let text = try await manager.finish()
+                if !text.isEmpty, let cb = callback {
+                    text.withCString { cStr in
+                        cb(strdup(cStr))
+                    }
+                }
+            } catch {
+                print("[FluidAudioBridge] EOU async finish error: \(error)")
+            }
+        }
+
+        return true
+    }
+
+    /// Synchronous EOU feed (legacy, blocking). Kept for batch transcription
+    /// fallback where blocking is acceptable.
     func eouFeed(_ samples: [Float]) throws -> String? {
         guard let manager = eouManager else {
             throw BridgeError.notInitialized
@@ -121,6 +193,7 @@ class FluidAudioBridgeInternal {
         return capturedTranscript
     }
 
+    /// Synchronous EOU finish (legacy, blocking).
     func eouFinish() throws -> String {
         guard let manager = eouManager else {
             throw BridgeError.notInitialized
@@ -1526,4 +1599,43 @@ public func fluidaudio_is_eou_available(_ ptr: UnsafeMutableRawPointer?) -> Int3
     guard let ptr = ptr else { return 0 }
     let bridge = Unmanaged<FluidAudioBridgeInternal>.fromOpaque(ptr).takeUnretainedValue()
     return bridge.isEouAvailable ? 1 : 0
+}
+
+// MARK: - Non-blocking EOU (callback-based)
+
+/// Register a C callback for EOU text delivery. When the EOU model detects
+/// an utterance boundary during `fluidaudio_eou_feed_async`, it calls this
+/// callback with a `strdup`-ed C string. The receiver must free it.
+@_cdecl("fluidaudio_eou_set_callback")
+public func fluidaudio_eou_set_callback(
+    _ ptr: UnsafeMutableRawPointer?,
+    _ callback: EouTextCallback?
+) -> Int32 {
+    guard let ptr = ptr else { return -1 }
+    let bridge = Unmanaged<FluidAudioBridgeInternal>.fromOpaque(ptr).takeUnretainedValue()
+    bridge.eouCallback = callback
+    return 0
+}
+
+/// Non-blocking EOU feed: queues audio to the Swift async runtime and returns
+/// immediately (0 = success). Text is delivered via the registered callback.
+@_cdecl("fluidaudio_eou_feed_async")
+public func fluidaudio_eou_feed_async(
+    _ ptr: UnsafeMutableRawPointer?,
+    _ samples: UnsafePointer<Float>?,
+    _ count: UInt32
+) -> Int32 {
+    guard let ptr = ptr, let samples = samples else { return -1 }
+    let bridge = Unmanaged<FluidAudioBridgeInternal>.fromOpaque(ptr).takeUnretainedValue()
+    let sampleArray = Array(UnsafeBufferPointer(start: samples, count: Int(count)))
+    return bridge.eouFeedAsync(sampleArray) ? 0 : -1
+}
+
+/// Non-blocking EOU finish: queues the finish operation and delivers remaining
+/// text via the registered callback.
+@_cdecl("fluidaudio_eou_finish_async")
+public func fluidaudio_eou_finish_async(_ ptr: UnsafeMutableRawPointer?) -> Int32 {
+    guard let ptr = ptr else { return -1 }
+    let bridge = Unmanaged<FluidAudioBridgeInternal>.fromOpaque(ptr).takeUnretainedValue()
+    return bridge.eouFinishAsync() ? 0 : -1
 }

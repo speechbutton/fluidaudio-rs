@@ -116,6 +116,26 @@ impl FluidAudio {
         self.bridge.is_eou_available()
     }
 
+    /// Register a C callback for non-blocking EOU text delivery.
+    /// The callback is invoked from the Swift async thread when an utterance
+    /// boundary is detected. The callback receives a `strdup`-ed C string
+    /// that the receiver must free.
+    pub fn eou_set_callback(&self, cb: Option<extern "C" fn(*const i8)>) -> Result<(), FluidAudioError> {
+        self.bridge.eou_set_callback(cb).map_err(FluidAudioError::from)
+    }
+
+    /// Non-blocking EOU feed: queues audio and returns immediately.
+    /// Text is delivered asynchronously via the registered callback.
+    pub fn eou_feed_async(&self, samples: &[f32]) -> Result<(), FluidAudioError> {
+        self.bridge.eou_feed_async(samples).map_err(FluidAudioError::from)
+    }
+
+    /// Non-blocking EOU finish: queues the finish and returns immediately.
+    /// Remaining text is delivered via the registered callback.
+    pub fn eou_finish_async(&self) -> Result<(), FluidAudioError> {
+        self.bridge.eou_finish_async().map_err(FluidAudioError::from)
+    }
+
     /// Transcribe an audio file
     ///
     /// # Arguments
