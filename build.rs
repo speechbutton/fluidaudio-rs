@@ -12,7 +12,10 @@ fn main() {
     let cargo_target = std::env::var("TARGET").unwrap_or_default();
 
     // Build the Swift package first to get FluidAudio dependency
-    println!("cargo:warning=Building Swift package for {}...", cargo_target);
+    println!(
+        "cargo:warning=Building Swift package for {}...",
+        cargo_target
+    );
 
     let swift_build_dir = out_dir.join("swift-build");
     std::fs::create_dir_all(&swift_build_dir).expect("Failed to create swift-build directory");
@@ -37,7 +40,11 @@ fn main() {
             return None;
         }
         let path = String::from_utf8(out.stdout).ok()?.trim().to_owned();
-        if path.is_empty() { None } else { Some(path) }
+        if path.is_empty() {
+            None
+        } else {
+            Some(path)
+        }
     });
 
     let mut swift_args: Vec<String> = vec![
@@ -143,7 +150,9 @@ fn find_bridge_lib_dir(swift_build_dir: &std::path::Path) -> Option<PathBuf> {
         let mut subdirs = vec![];
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_file() && path.file_name().and_then(|n| n.to_str()) == Some("libFluidAudioBridge.a") {
+            if path.is_file()
+                && path.file_name().and_then(|n| n.to_str()) == Some("libFluidAudioBridge.a")
+            {
                 return path.parent().map(|p| p.to_path_buf());
             }
             if path.is_dir() {
