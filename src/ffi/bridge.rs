@@ -58,6 +58,10 @@ extern "C" {
     // ASR v2 (English-only)
     fn fluidaudio_initialize_asr_v2(bridge: *mut std::ffi::c_void) -> i32;
 
+    // Background ASR prewarm — non-blocking
+    fn fluidaudio_prewarm_asr(bridge: *mut std::ffi::c_void) -> i32;
+    fn fluidaudio_prewarm_asr_v2(bridge: *mut std::ffi::c_void) -> i32;
+
     // EOU (End-of-Utterance streaming)
     fn fluidaudio_initialize_eou(bridge: *mut std::ffi::c_void, debounce_ms: i32) -> i32;
     fn fluidaudio_eou_feed(
@@ -66,10 +70,7 @@ extern "C" {
         count: u32,
         out_text: *mut *mut i8,
     ) -> i32;
-    fn fluidaudio_eou_finish(
-        bridge: *mut std::ffi::c_void,
-        out_text: *mut *mut i8,
-    ) -> i32;
+    fn fluidaudio_eou_finish(bridge: *mut std::ffi::c_void, out_text: *mut *mut i8) -> i32;
     fn fluidaudio_eou_reset(bridge: *mut std::ffi::c_void) -> i32;
     fn fluidaudio_is_eou_available(bridge: *mut std::ffi::c_void) -> i32;
 
@@ -715,22 +716,57 @@ impl FluidAudioBridge {
 
     pub fn initialize_asr_v2(&self) -> Result<(), String> {
         let result = unsafe { fluidaudio_initialize_asr_v2(self.ptr) };
-        if result == 0 { Ok(()) } else { Err("ASR v2 initialization failed".into()) }
+        if result == 0 {
+            Ok(())
+        } else {
+            Err("ASR v2 initialization failed".into())
+        }
+    }
+
+    // ── Background ASR prewarm ─────────────────────────────────────────
+
+    pub fn prewarm_asr(&self) -> Result<(), String> {
+        let result = unsafe { fluidaudio_prewarm_asr(self.ptr) };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err("ASR prewarm failed (bad bridge pointer)".into())
+        }
+    }
+
+    pub fn prewarm_asr_v2(&self) -> Result<(), String> {
+        let result = unsafe { fluidaudio_prewarm_asr_v2(self.ptr) };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err("ASR v2 prewarm failed (bad bridge pointer)".into())
+        }
     }
 
     // ── EOU (End-of-Utterance streaming) ──────────────────────────────
 
     pub fn initialize_eou(&self, debounce_ms: i32) -> Result<(), String> {
         let result = unsafe { fluidaudio_initialize_eou(self.ptr, debounce_ms) };
-        if result == 0 { Ok(()) } else { Err("EOU initialization failed".into()) }
+        if result == 0 {
+            Ok(())
+        } else {
+            Err("EOU initialization failed".into())
+        }
     }
 
     pub fn eou_feed(&self, samples: &[f32]) -> Result<Option<String>, String> {
         let mut text_ptr: *mut i8 = std::ptr::null_mut();
         let result = unsafe {
-            fluidaudio_eou_feed(self.ptr, samples.as_ptr(), samples.len() as u32, &mut text_ptr)
+            fluidaudio_eou_feed(
+                self.ptr,
+                samples.as_ptr(),
+                samples.len() as u32,
+                &mut text_ptr,
+            )
         };
-        if result != 0 { return Err("EOU feed failed".into()); }
+        if result != 0 {
+            return Err("EOU feed failed".into());
+        }
         if text_ptr.is_null() {
             Ok(None)
         } else {
@@ -746,7 +782,9 @@ impl FluidAudioBridge {
     pub fn eou_finish(&self) -> Result<String, String> {
         let mut text_ptr: *mut i8 = std::ptr::null_mut();
         let result = unsafe { fluidaudio_eou_finish(self.ptr, &mut text_ptr) };
-        if result != 0 { return Err("EOU finish failed".into()); }
+        if result != 0 {
+            return Err("EOU finish failed".into());
+        }
         if text_ptr.is_null() {
             Ok(String::new())
         } else {
@@ -761,7 +799,11 @@ impl FluidAudioBridge {
 
     pub fn eou_reset(&self) -> Result<(), String> {
         let result = unsafe { fluidaudio_eou_reset(self.ptr) };
-        if result == 0 { Ok(()) } else { Err("EOU reset failed".into()) }
+        if result == 0 {
+            Ok(())
+        } else {
+            Err("EOU reset failed".into())
+        }
     }
 
     pub fn is_eou_available(&self) -> bool {
@@ -776,23 +818,34 @@ impl FluidAudioBridge {
     /// the receiver.
     pub fn eou_set_callback(&self, cb: Option<extern "C" fn(*const i8)>) -> Result<(), String> {
         let result = unsafe { fluidaudio_eou_set_callback(self.ptr, cb) };
-        if result == 0 { Ok(()) } else { Err("EOU set_callback failed".into()) }
+        if result == 0 {
+            Ok(())
+        } else {
+            Err("EOU set_callback failed".into())
+        }
     }
 
     /// Non-blocking EOU feed: queues audio to the Swift async runtime and
     /// returns immediately. Text is delivered via the registered callback.
     pub fn eou_feed_async(&self, samples: &[f32]) -> Result<(), String> {
-        let result = unsafe {
-            fluidaudio_eou_feed_async(self.ptr, samples.as_ptr(), samples.len() as u32)
-        };
-        if result == 0 { Ok(()) } else { Err("EOU async feed failed".into()) }
+        let result =
+            unsafe { fluidaudio_eou_feed_async(self.ptr, samples.as_ptr(), samples.len() as u32) };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err("EOU async feed failed".into())
+        }
     }
 
     /// Non-blocking EOU finish: queues the finish operation. Remaining text
     /// is delivered via the registered callback.
     pub fn eou_finish_async(&self) -> Result<(), String> {
         let result = unsafe { fluidaudio_eou_finish_async(self.ptr) };
-        if result == 0 { Ok(()) } else { Err("EOU async finish failed".into()) }
+        if result == 0 {
+            Ok(())
+        } else {
+            Err("EOU async finish failed".into())
+        }
     }
 
     pub fn system_info(&self) -> SystemInfo {

@@ -91,13 +91,38 @@ impl FluidAudio {
     }
 
     pub fn init_asr_v2(&self) -> Result<(), FluidAudioError> {
-        self.bridge.initialize_asr_v2().map_err(FluidAudioError::from)
+        self.bridge
+            .initialize_asr_v2()
+            .map_err(FluidAudioError::from)
+    }
+
+    /// Kick off background download + compilation of the v3 ASR model and
+    /// return immediately. Subsequent [`init_asr`] calls will await whatever
+    /// this kicked off — so if the consumer calls `prewarm_asr` early in app
+    /// launch and only calls `init_asr` later (e.g. when the user taps record),
+    /// the visible latency drops to near-zero.
+    ///
+    /// Idempotent: calling repeatedly while a load is in-flight or after the
+    /// manager is already loaded is a no-op.
+    ///
+    /// [`init_asr`]: Self::init_asr
+    pub fn prewarm_asr(&self) -> Result<(), FluidAudioError> {
+        self.bridge.prewarm_asr().map_err(FluidAudioError::from)
+    }
+
+    /// Same as [`prewarm_asr`] but for the v2 English-only model.
+    ///
+    /// [`prewarm_asr`]: Self::prewarm_asr
+    pub fn prewarm_asr_v2(&self) -> Result<(), FluidAudioError> {
+        self.bridge.prewarm_asr_v2().map_err(FluidAudioError::from)
     }
 
     // ========== EOU (End-of-Utterance) Methods ==========
 
     pub fn init_eou(&self, debounce_ms: i32) -> Result<(), FluidAudioError> {
-        self.bridge.initialize_eou(debounce_ms).map_err(FluidAudioError::from)
+        self.bridge
+            .initialize_eou(debounce_ms)
+            .map_err(FluidAudioError::from)
     }
 
     pub fn eou_feed(&self, samples: &[f32]) -> Result<Option<String>, FluidAudioError> {
@@ -120,20 +145,29 @@ impl FluidAudio {
     /// The callback is invoked from the Swift async thread when an utterance
     /// boundary is detected. The callback receives a `strdup`-ed C string
     /// that the receiver must free.
-    pub fn eou_set_callback(&self, cb: Option<extern "C" fn(*const i8)>) -> Result<(), FluidAudioError> {
-        self.bridge.eou_set_callback(cb).map_err(FluidAudioError::from)
+    pub fn eou_set_callback(
+        &self,
+        cb: Option<extern "C" fn(*const i8)>,
+    ) -> Result<(), FluidAudioError> {
+        self.bridge
+            .eou_set_callback(cb)
+            .map_err(FluidAudioError::from)
     }
 
     /// Non-blocking EOU feed: queues audio and returns immediately.
     /// Text is delivered asynchronously via the registered callback.
     pub fn eou_feed_async(&self, samples: &[f32]) -> Result<(), FluidAudioError> {
-        self.bridge.eou_feed_async(samples).map_err(FluidAudioError::from)
+        self.bridge
+            .eou_feed_async(samples)
+            .map_err(FluidAudioError::from)
     }
 
     /// Non-blocking EOU finish: queues the finish and returns immediately.
     /// Remaining text is delivered via the registered callback.
     pub fn eou_finish_async(&self) -> Result<(), FluidAudioError> {
-        self.bridge.eou_finish_async().map_err(FluidAudioError::from)
+        self.bridge
+            .eou_finish_async()
+            .map_err(FluidAudioError::from)
     }
 
     /// Transcribe an audio file
@@ -583,7 +617,12 @@ impl FluidAudio {
         max_audio_seconds: f64,
     ) -> Result<(), FluidAudioError> {
         self.bridge
-            .qwen3_streaming_start(language, min_audio_seconds, chunk_seconds, max_audio_seconds)
+            .qwen3_streaming_start(
+                language,
+                min_audio_seconds,
+                chunk_seconds,
+                max_audio_seconds,
+            )
             .map_err(FluidAudioError::from)
     }
 
@@ -597,10 +636,7 @@ impl FluidAudio {
     ///
     /// Call this repeatedly as audio chunks become available. The engine will return
     /// partial transcripts according to the configuration set in `qwen3_streaming_start`.
-    pub fn qwen3_streaming_feed(
-        &self,
-        samples: &[f32],
-    ) -> Result<Option<String>, FluidAudioError> {
+    pub fn qwen3_streaming_feed(&self, samples: &[f32]) -> Result<Option<String>, FluidAudioError> {
         self.bridge
             .qwen3_streaming_feed(samples)
             .map_err(FluidAudioError::from)

@@ -34,6 +34,14 @@ class FluidAudioBridgeInternal {
     /// when an utterance boundary is detected.
     var eouCallback: EouTextCallback?
 
+    /// Guards `asrLoadTask` / `asrLoadedVersion` / the ASR-related stored
+    /// state from concurrent prewarm + init calls. NSLock because we cross
+    /// async/sync boundaries and need cheap, reentrant-free locking that
+    /// works in synchronous bridge methods.
+    private let asrStateLock = NSLock()
+    private var asrLoadTask: Task<Void, Error>?
+    private var asrLoadedVersion: AsrModelVersion?
+
     init() {}
 
     // MARK: - ASR (v3 default, v2 English-only)
@@ -46,27 +54,113 @@ class FluidAudioBridgeInternal {
         try initializeAsrWithVersion(.v2)
     }
 
-    private func initializeAsrWithVersion(_ version: AsrModelVersion) throws {
-        let semaphore = DispatchSemaphore(value: 0)
-        var initError: Error?
+    /// Kick off the ASR load in the background and return immediately. Idempotent:
+    /// if a load is already in-flight or the manager is already loaded for the
+    /// requested version, this is a no-op. Subsequent `initializeAsr()` calls
+    /// await whatever this kicked off, so the cost is paid invisibly.
+    func prewarmAsr(version: AsrModelVersion = .v3) {
+        asrStateLock.lock()
+        defer { asrStateLock.unlock() }
 
-        Task(priority: .userInitiated) {
+        // Already loaded for this version → nothing to do.
+        if asrManager != nil, asrLoadedVersion == version {
+            return
+        }
+        // Already in-flight (regardless of version) → first one wins; init
+        // will surface a version-conflict error if it actually mismatches.
+        if asrLoadTask != nil {
+            return
+        }
+        // Loaded as a different version → don't silently swap; let init() surface it.
+        if asrManager != nil, asrLoadedVersion != version {
+            return
+        }
+
+        asrLoadTask = Task(priority: .userInitiated) { [weak self] in
             do {
                 let models = try await AsrModels.downloadAndLoad(version: version)
-                self.asrModels = models
-
                 let manager = AsrManager()
                 try await manager.loadModels(models)
+
+                guard let self = self else { return }
+                self.asrStateLock.lock()
+                self.asrModels = models
                 self.asrManager = manager
+                self.asrLoadedVersion = version
+                self.asrLoadTask = nil
+                self.asrStateLock.unlock()
             } catch {
-                initError = error
+                // Clear the task on failure so a retry can take a fresh attempt.
+                if let self = self {
+                    self.asrStateLock.lock()
+                    self.asrLoadTask = nil
+                    self.asrStateLock.unlock()
+                }
+                throw error
+            }
+        }
+    }
+
+    private func initializeAsrWithVersion(_ version: AsrModelVersion) throws {
+        // Fast path: already loaded with the requested version.
+        asrStateLock.lock()
+        if asrManager != nil, asrLoadedVersion == version {
+            asrStateLock.unlock()
+            return
+        }
+        if asrManager != nil, asrLoadedVersion != version {
+            asrStateLock.unlock()
+            throw NSError(
+                domain: "FluidAudioBridge",
+                code: 1,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "ASR already initialized with a different model version; call cleanup() first."
+                ])
+        }
+
+        // Reuse the in-flight task if there is one; otherwise start one and
+        // pick it up under the lock. Two callers racing here will both see
+        // the same task because prewarmAsr re-checks under the same lock.
+        var task = asrLoadTask
+        asrStateLock.unlock()
+
+        if task == nil {
+            prewarmAsr(version: version)
+            asrStateLock.lock()
+            task = asrLoadTask
+            asrStateLock.unlock()
+        }
+
+        // The load may already have completed between our two lock spans.
+        // Re-check before treating a nil task as an error.
+        guard let inFlight = task else {
+            asrStateLock.lock()
+            let loaded = asrManager != nil && asrLoadedVersion == version
+            asrStateLock.unlock()
+            if loaded { return }
+            throw NSError(
+                domain: "FluidAudioBridge",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "ASR load task vanished"])
+        }
+
+        // Bridge async → sync. The task body installs the manager under the
+        // lock before resolving, so once `inFlight.value` returns we're safe
+        // to call into asrManager directly.
+        let semaphore = DispatchSemaphore(value: 0)
+        var taskError: Error?
+        Task {
+            do {
+                try await inFlight.value
+            } catch {
+                taskError = error
             }
             semaphore.signal()
         }
-
         semaphore.wait()
 
-        if let error = initError {
+        if let error = taskError {
             throw error
         }
     }
@@ -876,6 +970,28 @@ public func fluidaudio_initialize_asr(_ ptr: UnsafeMutableRawPointer?) -> Int32 
         print("ASR init error: \(error)")
         return -1
     }
+}
+
+/// Non-blocking: kicks off background ASR model load for the v3 model and
+/// returns immediately. Subsequent `fluidaudio_initialize_asr` calls will
+/// await whatever this started. Useful at app launch — call once early so the
+/// model load happens while the user is still navigating, and the eventual
+/// `initialize_asr` returns near-instantly.
+@_cdecl("fluidaudio_prewarm_asr")
+public func fluidaudio_prewarm_asr(_ ptr: UnsafeMutableRawPointer?) -> Int32 {
+    guard let ptr = ptr else { return -1 }
+    let bridge = Unmanaged<FluidAudioBridgeInternal>.fromOpaque(ptr).takeUnretainedValue()
+    bridge.prewarmAsr(version: .v3)
+    return 0
+}
+
+/// Same as `fluidaudio_prewarm_asr` but for the v2 English-only model.
+@_cdecl("fluidaudio_prewarm_asr_v2")
+public func fluidaudio_prewarm_asr_v2(_ ptr: UnsafeMutableRawPointer?) -> Int32 {
+    guard let ptr = ptr else { return -1 }
+    let bridge = Unmanaged<FluidAudioBridgeInternal>.fromOpaque(ptr).takeUnretainedValue()
+    bridge.prewarmAsr(version: .v2)
+    return 0
 }
 
 @_cdecl("fluidaudio_transcribe_file")
